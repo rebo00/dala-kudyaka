@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ku" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>فڕینی داڵەکان + ڕیزبەندی</title>
+    
+    <!-- لایبرەری Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+
+    <style>
+        body { 
+            margin: 0; padding: 0; background-color: #1e293b; overflow: hidden; 
+            display: flex; justify-content: center; align-items: center; 
+            height: 100vh; touch-action: none; font-family: Arial, sans-serif; 
+        }
+        canvas { 
+            background-color: #38bdf8; display: block; box-shadow: 0 0 20px rgba(0,0,0,0.5); 
+        }
+        .modal { 
+            position: absolute; color: white; text-align: center; 
+            background: rgba(30, 41, 59, 0.95); padding: 25px; 
+            border-radius: 15px; border: 2px solid #38bdf8; z-index: 10;
+            width: 80%; max-width: 320px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        #gameOverScreen { display: none; }
+        h1 { color: #facc15; margin-bottom: 10px; font-size: 24px; margin-top: 0; }
+        p { font-size: 16px; margin-bottom: 15px; }
+        input {
+            width: 90%; padding: 10px; margin-bottom: 15px;
+            border-radius: 8px; border: 1px solid #38bdf8;
+            font-size: 16px; text-align: center; font-weight: bold;
+        }
+        button { 
+            background: #4ade80; border: none; padding: 10px 20px; 
+            font-size: 18px; color: black; font-weight: bold; 
+            border-radius: 8px; cursor: pointer; width: 100%; margin-top: 5px;
+        }
+        button:active { transform: scale(0.95); }
+        
+        .leaderboard-box {
+            background: #0f172a; border-radius: 8px; padding: 10px;
+            margin-top: 15px; max-height: 150px; overflow-y: auto; text-align: right;
+        }
+        .leaderboard-item {
+            display: flex; justify-content: space-between;
+            padding: 6px 10px; border-bottom: 1px solid #334155; font-size: 14px;
+        }
+        .leaderboard-item:nth-child(1) { color: #facc15; font-weight: bold; }
+        .leaderboard-item:nth-child(2) { color: #e2e8f0; font-weight: bold; }
+        .leaderboard-item:nth-child(3) { color: #cd7f32; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <!-- شاشەی تۆمارکردنی ناو -->
+    <div id="startScreen" class="modal">
+        <h1>🦅 فڕینی داڵەکان</h1>
+        <p>ناوی خۆت بنووسە بۆ ڕیزبەندی:</p>
+        <input type="text" id="playerNameInput" placeholder="ناوی یاریزان..." maxlength="12">
+        <button onclick="startGame()">دەستپێکردن 🎮</button>
+    </div>
+
+    <!-- شاشەی کۆتایی و ڕیزبەندی -->
+    <div id="gameOverScreen" class="modal">
+        <h1 style="color: #ef4444;">یاری کۆتایی هات!</h1>
+        <p id="finalScoreText" style="font-size: 20px; font-weight: bold;">سکۆر: 0</p>
+        
+        <h3 style="margin: 10px 0 5px 0; color: #38bdf8;">🏆 ۱۰ باشترین یاریزانەکان</h3>
+        <div class="leaderboard-box" id="leaderboardList">
+            <div style="text-align: center; color: #94a3b8;">چاوەڕوان بە...</div>
+        </div>
+
+        <button onclick="resetGame()" style="background: #38bdf8; margin-top: 15px;">دووبارە 🔄</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // --- کۆدی ڕاستەقینەی Firebase ەکەی خۆت ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAbV355rHrDfgL5nJPYQM7W", // لە فۆتۆکەوە وەرمگرتووە
+            authDomain: "dala-kurdyaka.firebaseapp.com",
+            databaseURL: "https://dala-kurdyaka-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "dala-kurdyaka",
+            storageBucket: "dala-kurdyaka.appspot.com",
+            messagingSenderId: "233326316496",
+            appId: "1:233326316496:web:06d6116934"
+        };
+
+        // کاراکردنی Firebase
+        let db = null;
+        try {
+            firebase.initializeApp(firebaseConfig);
+            db = firebase.database();
+        } catch(e) {
+            console.log("کێشە لە پەیوەستبوون بە Firebase هەبوو.");
+        }
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        function resizeCanvas() {
+            canvas.width = Math.min(window.innerWidth, 450);
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let frames = 0;
+        let score = 0;
+        let playerName = "یاریزان";
+        let gameState = "START";
+
+        const bird = {
+            x: 80, y: canvas.height / 2, radius: 15,
+            velocity: 0, gravity: 0.22, jump: -5.2,
+            draw: function() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                let rotation = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (this.velocity * 0.1)));
+                ctx.rotate(rotation);
+                
+                ctx.fillStyle = "#ff4500";
+                ctx.beginPath(); ctx.ellipse(0, 0, 18, 14, 0, 0, Math.PI * 2); ctx.fill();
+                
+                ctx.fillStyle = "white";
+                ctx.beginPath(); ctx.arc(8, -4, 5, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = "black";
+                ctx.beginPath(); ctx.arc(9, -4, 2, 0, Math.PI*2); ctx.fill();
+                
+                ctx.fillStyle = "#f59e0b";
+                ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(24, 3); ctx.lineTo(14, 6); ctx.fill();
+                
+                ctx.fillStyle = "#ff8c00";
+                ctx.beginPath();
+                let wingAnim = (gameState === "GAME" && frames % 20 < 10) ? -0.3 : 0.3;
+                ctx.ellipse(-4, 2, 10, 6, wingAnim, 0, Math.PI * 2); ctx.fill();
+                
+                ctx.restore();
+            },
+            update: function() {
+                this.velocity += this.gravity;
+                this.y += this.velocity;
+                if (this.y + this.radius >= canvas.height - 40 || this.y - this.radius <= 0) {
+                    gameOver();
+                }
+            },
+            flap: function() { this.velocity = this.jump; }
+        };
+
+        const pipes = {
+            items: [], width: 55, gap: 170, dx: 2.2,
+            draw: function() {
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    ctx.fillStyle = "#22c55e";
+                    ctx.fillRect(p.x, 0, this.width, p.top);
+                    ctx.fillRect(p.x, canvas.height - p.bottom, this.width, p.bottom);
+                    
+                    ctx.fillStyle = "#16a34a";
+                    ctx.fillRect(p.x - 4, p.top - 20, this.width + 8, 20);
+                    ctx.fillRect(p.x - 4, canvas.height - p.bottom, this.width + 8, 20);
+                }
+            },
+            update: function() {
+                if (frames % 130 === 0) {
+                    let minHeight = 60;
+                    let maxHeight = canvas.height - this.gap - minHeight - 40;
+                    let topHeight = Math.floor(Math.random() * (maxHeight - minHeight + 1) + minHeight);
+                    this.items.push({ x: canvas.width, top: topHeight, bottom: canvas.height - (topHeight + this.gap), passed: false });
+                }
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    p.x -= this.dx;
+
+                    if (bird.x + bird.radius > p.x && bird.x - bird.radius < p.x + this.width &&
+                        (bird.y - bird.radius < p.top || bird.y + bird.radius > canvas.height - p.bottom)) {
+                        gameOver();
+                    }
+
+                    if (p.x + this.width < bird.x && !p.passed) {
+                        score++;
+                        p.passed = true;
+                    }
+
+                    if (p.x + this.width < 0) {
+                        this.items.shift();
+                        i--;
+                    }
+                }
+            },
+            reset: function() { this.items = []; }
+        };
+
+        function drawClouds() {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+            [40, 220, 400].forEach((x, index) => {
+                let cx = (x - (frames * 0.4)) % (canvas.width + 150);
+                if (cx < -100) cx = canvas.width + 150;
+                let cy = 50 + (index % 2) * 20;
+                ctx.beginPath();
+                ctx.arc(cx, cy, 25, 0, Math.PI*2);
+                ctx.arc(cx+25, cy-15, 30, 0, Math.PI*2);
+                ctx.arc(cx+50, cy, 25, 0, Math.PI*2);
+                ctx.fill();
+            });
+        }
+
+        CanvasRenderingContext2D.prototype.roundRect = CanvasRenderingContext2D.prototype.roundRect || function(x, y, w, h, r) {
+            this.beginPath(); this.moveTo(x+r, y); this.arcTo(x+w, y, x+w, y+h, r); 
+            this.arcTo(x+w, y+h, x, y+h, r); this.arcTo(x, y+h, x, y, r); 
+            this.arcTo(x, y, x+r, y, r); this.closePath(); return this;
+        };
+
+        function drawScore() {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+            ctx.roundRect(canvas.width/2 - 45, canvas.height - 130, 90, 50, 10);
+            ctx.fill();
+
+            ctx.fillStyle = "white";
+            ctx.font = "bold 34px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText(score, canvas.width / 2, canvas.height - 95);
+        }
+
+        function drawGround() {
+            ctx.fillStyle = "#15803d";
+            ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+            ctx.fillStyle = "#22c55e";
+            ctx.fillRect(0, canvas.height - 40, canvas.width, 10);
+        }
+
+        function saveScoreOnline(name, currentScore) {
+            if (!db) return;
+            const scoresRef = db.ref('leaderboard');
+            scoresRef.push({
+                name: name,
+                score: currentScore,
+                date: Date.now()
+            });
+        }
+
+        function loadLeaderboard() {
+            const listContainer = document.getElementById("leaderboardList");
+            if (!db) {
+                listContainer.innerHTML = "<div style='text-align:center;'>ڕیزبەندی ئۆنلاین ڕێکنەخراوە</div>";
+                return;
+            }
+
+            db.ref('leaderboard').orderByChild('score').limitToLast(10).once('value', (snapshot) => {
+                let scores = [];
+                snapshot.forEach((child) => {
+                    scores.push(child.val());
+                });
+                scores.reverse();
+
+                listContainer.innerHTML = "";
+                scores.forEach((item, index) => {
+                    let div = document.createElement("div");
+                    div.className = "leaderboard-item";
+                    div.innerHTML = `<span>${index + 1}. ${item.name}</span> <span>${item.score}</span>`;
+                    listContainer.appendChild(div);
+                });
+            });
+        }
+
+        function gameOver() {
+            gameState = "OVER";
+            document.getElementById("gameOverScreen").style.display = "block";
+            document.getElementById("finalScoreText").innerText = "سکۆر: " + score;
+            
+            if (score > 0) {
+                saveScoreOnline(playerName, score);
+            }
+            loadLeaderboard();
+        }
+
+        function startGame() {
+            let inputName = document.getElementById("playerNameInput").value.trim();
+            if (inputName !== "") {
+                playerName = inputName;
+            }
+            
+            document.getElementById("startScreen").style.display = "none";
+            document.getElementById("gameOverScreen").style.display = "none";
+            bird.y = canvas.height / 2;
+            bird.velocity = 0;
+            pipes.reset();
+            score = 0;
+            frames = 0;
+            gameState = "GAME";
+            bird.flap();
+        }
+
+        function resetGame() {
+            startGame();
+        }
+
+        canvas.addEventListener("touchstart", function(e) {
+            e.preventDefault();
+            if (gameState === "GAME") bird.flap();
+        }, {passive: false});
+        
+        canvas.addEventListener("mousedown", function(e) {
+            if (gameState === "GAME") bird.flap();
+        });
+
+        function loop() {
+            ctx.fillStyle = "#38bdf8"; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawClouds();
+            
+            if (gameState === "GAME") {
+                pipes.update();
+                bird.update();
+                frames++;
+            }
+            
+            pipes.draw();
+            drawGround();
+            
+            if (gameState === "GAME" || gameState === "OVER") {
+                drawScore();
+            }
+            bird.draw();
+
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    </script>
+</body>
+</html>
